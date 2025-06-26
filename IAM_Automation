@@ -1,0 +1,122 @@
+(function executeRule(current, previous /*null when async*/ ) {
+    if (!current.assigned_to) {
+        var gdt = new GlideDateTime();
+        var currentDay = gdt.getDayOfMonthLocalTime();
+        var columnLabel = "day_" + currentDay;
+
+        var backendColumnName;
+        var dictionaryGR = new GlideRecord('sys_dictionary');
+        dictionaryGR.addQuery('name', 'u_iam_shifts');
+        dictionaryGR.addQuery('column_label', columnLabel);
+        dictionaryGR.query();
+        if (dictionaryGR.next()) {
+            backendColumnName = dictionaryGR.getValue('element');
+        } else {
+            gs.error("Backend column not found for: " + columnLabel);
+            return;
+        }
+
+        // Get current UTC time
+        var currentUTCTime = new GlideDateTime().getValue().split(" ")[1]; // "HH:MM:SS"
+        var lastGlobal = gs.getProperty('testing.iamops.shifts.last_global', '');
+
+        // ------------- BATCH ONE (07:30 AM – 4:00 PM IST) -------------
+        if (currentUTCTime >= "02:00:00" && currentUTCTime < "10:30:00") {
+            var eligibleUsersBatchOne = [];
+            var gr1 = new GlideRecord('u_iam_shifts');
+            gr1.addQuery(backendColumnName, 'W');
+            var teamQuery1 = gr1.addQuery('u_team', 'A');
+            teamQuery1.addOrCondition('u_team', 'B1');
+            teamQuery1.addOrCondition('u_team', 'B2');
+            var regionQuery1 = gr1.addQuery('u_region', 'APAC');
+            regionQuery1.addOrCondition('u_region', 'EMEA');
+            regionQuery1.addOrCondition('u_region', '');
+            gr1.orderBy('u_employee_name');
+            gr1.query();
+            while (gr1.next()) {
+                eligibleUsersBatchOne.push(gr1.getValue('u_employee_name'));
+            }
+
+            if (eligibleUsersBatchOne.length === 0) {
+                gs.addErrorMessage("No eligible users found");
+                return;
+            }
+
+			var found = false;
+            var filteredUsers = eligibleUsersBatchOne.filter(user =>  {
+                if(user === lastGlobal && !found){
+					found = true;
+					return false;
+				}
+				return true;
+            });
+            if (filteredUsers.length === 0) filteredUsers = eligibleUsersBatchOne;
+
+            var lastAssigned = gs.getProperty('testing.iamops.shifts', '');
+            var startIndex = lastAssigned ? (filteredUsers.indexOf(lastAssigned) + 1) % filteredUsers.length : 0;
+
+            for (var i = 0; i < filteredUsers.length; i++) {
+                var index = (startIndex + i) % filteredUsers.length;
+                var userSysId = filteredUsers[index];
+
+                var userGR1 = new GlideRecord('u_iam_shifts');
+                userGR1.addQuery('u_employee_name', userSysId);
+                userGR1.addQuery(backendColumnName, 'W');
+                userGR1.query();
+                if (userGR1.next()) {
+                    current.assigned_to = userSysId;
+                    gs.setProperty('testing.iamops.shifts', userSysId);
+                    gs.setProperty('testing.iamops.shifts.last_global', userSysId);
+                    gs.log("Assigned Batch One user: " + userSysId);
+                    return;
+                }
+            }
+        }
+
+        // ------------- BATCH TWO (04:00 PM – 7:30 PM IST) -------------
+        if (currentUTCTime >= "10:30:00" && currentUTCTime < "14:00:00") {
+            var eligibleUsersBatchTwo = [];
+            var gr2 = new GlideRecord('u_iam_shifts');
+            gr2.addQuery(backendColumnName, 'W');
+            var teamQuery2 = gr2.addQuery('u_team', 'B1');
+            teamQuery2.addOrCondition('u_team', 'B2');
+            gr2.orderBy('u_employee_name');
+            gr2.query();
+            while (gr2.next()) {
+                eligibleUsersBatchTwo.push(gr2.getValue('u_employee_name'));
+            }
+
+            if (eligibleUsersBatchTwo.length === 0) {
+                gs.warn("No eligible users found for Batch Two.");
+                return;
+            }
+
+            var filteredUsers2 = eligibleUsersBatchTwo.filter(function(u) {
+                return u !== lastGlobal;
+            });
+            if (filteredUsers2.length === 0) filteredUsers2 = eligibleUsersBatchTwo;
+
+            var lastAssigned2 = gs.getProperty('testing.iamops.shifts.batch.two', '');
+            var startIndex2 = lastAssigned2 ? (filteredUsers2.indexOf(lastAssigned2) + 1) % filteredUsers2.length : 0;
+
+            for (var j = 0; j < filteredUsers2.length; j++) {
+                var index2 = (startIndex2 + j) % filteredUsers2.length;
+                var userSysId2 = filteredUsers2[index2];
+
+                var userGR2 = new GlideRecord('u_iam_shifts');
+                userGR2.addQuery('u_employee_name', userSysId2);
+                userGR2.addQuery(backendColumnName, 'W');
+                userGR2.query();
+                if (userGR2.next()) {
+                    current.assigned_to = userSysId2;
+                    gs.setProperty('testing.iamops.shifts.batch.two', userSysId2);
+                    gs.setProperty('testing.iamops.shifts.last_global', userSysId2);
+                    gs.log("Assigned Batch Two user: " + userSysId2);
+                    return;
+                }
+            }
+        }
+
+        gs.log("Current UTC time " + currentUTCTime + " is outside both shift windows.");
+    }
+})(current, previous);
